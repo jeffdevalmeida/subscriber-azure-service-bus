@@ -1,7 +1,6 @@
 ﻿using Microsoft.Azure.ServiceBus;
 using Newtonsoft.Json;
 using System;
-using System.ServiceModel;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,40 +9,57 @@ namespace SecondApp
 {
     class Program
     {
-        static string ConnectionStringServiceBus = "";
-        static string QueueName = "example-queue";
+        static string ConnectionStringServiceBus = "Endpoint=sb://sb-timetracker-dev.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=Re6koaCjv7gkFJyUq6mBkmlPvG34PrbN+2MqpM9DWEY=";
+        static string QueueName = "follower-queue";
 
-        static readonly QueueClient _queueClient = new QueueClient(ConnectionStringServiceBus, QueueName, ReceiveMode.PeekLock);
+        static IQueueClient _queueClient;
 
         static void Main(string[] args)
         {
-            RegisterHandler();
+            MainAsync().GetAwaiter().GetResult();
         }
 
-        private static void RegisterHandler()
+        private static async Task MainAsync()
         {
-            var messageHandlerOptions = new MessageHandlerOptions(ExceptionHandler)
+            _queueClient = new QueueClient(ConnectionStringServiceBus, QueueName, ReceiveMode.PeekLock);
+
+            Console.WriteLine("Press ctrl-c to stop receiving messages.");
+
+            ReceiveMessages();
+
+            Console.ReadKey();
+            // Close the client after the ReceiveMessages method has exited. 
+            await _queueClient.CloseAsync();
+        }
+
+        // Receives messages from the queue in a loop 
+        private static void ReceiveMessages()
+        {
+            try
             {
-                AutoComplete = false
-            };
+                // Register a OnMessage callback 
+                _queueClient.RegisterMessageHandler(
+                    async (message, token) =>
+                    {
+                        // Process the message 
+                        Console.WriteLine($"Received message: SequenceNumber:{message.SystemProperties.SequenceNumber} Body:{Encoding.UTF8.GetString(message.Body)}");
 
-            _queueClient.RegisterMessageHandler(ProccessMessageHandler, messageHandlerOptions);
+                        // Complete the message so that it is not received again. 
+                        // This can be done only if the queueClient is opened in ReceiveMode.PeekLock mode. 
+                        await _queueClient.CompleteAsync(message.SystemProperties.LockToken);
+                    },
+                    new MessageHandlerOptions(exceptionReceivedEventArgs =>
+                    {
+                        Console.WriteLine($"Message handler encountered an exception {exceptionReceivedEventArgs.Exception}.");
+                        return Task.CompletedTask;
+                    })
+                    { MaxConcurrentCalls = 1, AutoComplete = false });
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine($"{DateTime.Now} > Exception: {exception.Message}");
+            }
         }
 
-        private static async Task ProccessMessageHandler(Message message, CancellationToken cancellationToken)
-        {
-            string messageString = Encoding.UTF8.GetString(message.Body);
-            var userFollowing = JsonConvert.DeserializeObject<UserFollowingInputModel>(messageString);
-
-            Console.WriteLine("The user {0} started follow you. Followed at: {1}", userFollowing.IdUserFollower, userFollowing.FollowedAt);
-
-            await _queueClient.CompleteAsync(message.SystemProperties.LockToken);
-        }
-
-        private static Task ExceptionHandler(ExceptionReceivedEventArgs exceptionReceivedEventArgs)
-        {
-            Console.WriteLine(exceptionReceivedEventArgs.Exception.Message);
-            return Task.CompletedTask;
-        }
     }
 }
